@@ -76,7 +76,7 @@ detect_mac80211() {
 		[ "$found" -gt 0 ] && continue
 
 		mode_band="g"
-		channel="11"
+		channel="auto"
 		htmode=""
 		ht_capab=""
 
@@ -84,7 +84,7 @@ detect_mac80211() {
 
 		iw phy "$dev" info | grep -q '5180 MHz' && {
 			mode_band="a"
-			channel="36"
+			channel="auto"
 			iw phy "$dev" info | grep -q 'VHT Capabilities' && htmode="VHT80"
 		}
 
@@ -97,6 +97,9 @@ detect_mac80211() {
 			dev_id="set wireless.radio${devidx}.macaddr=$(cat /sys/class/ieee80211/${dev}/macaddress)"
 		fi
 
+		[ "$mode_band" = "a" ] && ssid_hz="5GHz" || ssid_hz="2.4GHz"
+		ssid_subfix=$(cat /sys/class/ieee80211/${dev}/macaddress | awk -F ':' '{print $4$5$6 }' | tr a-z A-Z)
+
 		uci -q batch <<-EOF
 			set wireless.radio${devidx}=wifi-device
 			set wireless.radio${devidx}.type=mac80211
@@ -104,13 +107,14 @@ detect_mac80211() {
 			set wireless.radio${devidx}.hwmode=11${mode_band}
 			${dev_id}
 			${ht_capab}
-			set wireless.radio${devidx}.disabled=1
+			set wireless.radio${devidx}.disabled=0
+			set wireless.radio${devidx}.noscan=1
 
 			set wireless.default_radio${devidx}=wifi-iface
 			set wireless.default_radio${devidx}.device=radio${devidx}
 			set wireless.default_radio${devidx}.network=lan
 			set wireless.default_radio${devidx}.mode=ap
-			set wireless.default_radio${devidx}.ssid=OpenWrt
+			set wireless.default_radio${devidx}.ssid=OpenWrt-${ssid_hz}-${ssid_subfix}
 			set wireless.default_radio${devidx}.encryption=none
 EOF
 		uci -q commit wireless
