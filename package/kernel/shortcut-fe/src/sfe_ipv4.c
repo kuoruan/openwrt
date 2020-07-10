@@ -21,6 +21,7 @@
 #include <linux/icmp.h>
 #include <net/tcp.h>
 #include <linux/etherdevice.h>
+#include <linux/version.h>
 
 #include "sfe.h"
 #include "sfe_cm.h"
@@ -349,6 +350,7 @@ enum sfe_ipv4_exception_events {
 	SFE_IPV4_EXCEPTION_EVENT_DATAGRAM_INCOMPLETE,
 	SFE_IPV4_EXCEPTION_EVENT_IP_OPTIONS_INCOMPLETE,
 	SFE_IPV4_EXCEPTION_EVENT_UNHANDLED_PROTOCOL,
+	SFE_IPV4_EXCEPTION_EVENT_CLONED_SKB_UNSHARE_ERROR,
 	SFE_IPV4_EXCEPTION_EVENT_LAST
 };
 
@@ -388,7 +390,8 @@ static char *sfe_ipv4_exception_events_string[SFE_IPV4_EXCEPTION_EVENT_LAST] = {
 	"NON_INITIAL_FRAGMENT",
 	"DATAGRAM_INCOMPLETE",
 	"IP_OPTIONS_INCOMPLETE",
-	"UNHANDLED_PROTOCOL"
+	"UNHANDLED_PROTOCOL",
+	"CLONED_SKB_UNSHARE_ERROR"
 };
 
 /*
@@ -1312,6 +1315,10 @@ static int sfe_ipv4_recv_udp(struct sfe_ipv4 *si, struct sk_buff *skb, struct ne
 		skb = skb_unshare(skb, GFP_ATOMIC);
                 if (!skb) {
 			DEBUG_WARN("Failed to unshare the cloned skb\n");
+			si->exception_events[SFE_IPV4_EXCEPTION_EVENT_CLONED_SKB_UNSHARE_ERROR]++;
+			si->packets_not_forwarded++;
+			spin_unlock_bh(&si->lock);
+
 			return 0;
 		}
 
@@ -1888,6 +1895,10 @@ static int sfe_ipv4_recv_tcp(struct sfe_ipv4 *si, struct sk_buff *skb, struct ne
 		skb = skb_unshare(skb, GFP_ATOMIC);
                 if (!skb) {
 			DEBUG_WARN("Failed to unshare the cloned skb\n");
+			si->exception_events[SFE_IPV4_EXCEPTION_EVENT_CLONED_SKB_UNSHARE_ERROR]++;
+			si->packets_not_forwarded++;
+			spin_unlock_bh(&si->lock);
+
 			return 0;
 		}
 
@@ -2847,9 +2858,17 @@ another_round:
 /*
  * sfe_ipv4_periodic_sync()
  */
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 15, 0))
+static void sfe_ipv4_periodic_sync(struct timer_list *arg)
+#else
 static void sfe_ipv4_periodic_sync(unsigned long arg)
+#endif /*KERNEL_VERSION(4, 15, 0)*/
 {
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 15, 0))
+	struct sfe_ipv4 *si = (struct sfe_ipv4 *)arg->cust_data;
+#else
 	struct sfe_ipv4 *si = (struct sfe_ipv4 *)arg;
+#endif /*KERNEL_VERSION(4, 15, 0)*/
 	u64 now_jiffies;
 	int quota;
 	sfe_sync_rule_callback_t sync_rule_callback;
@@ -3528,7 +3547,12 @@ static int __init sfe_ipv4_init(void)
 	/*
 	 * Create a timer to handle periodic statistics.
 	 */
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 15, 0))
+	timer_setup(&si->timer, sfe_ipv4_periodic_sync, 0);
+	si->timer.cust_data = (unsigned long)si;
+#else
 	setup_timer(&si->timer, sfe_ipv4_periodic_sync, (unsigned long)si);
+#endif /*KERNEL_VERSION(4, 15, 0)*/
 	mod_timer(&si->timer, jiffies + ((HZ + 99) / 100));
 
 	spin_lock_init(&si->lock);
